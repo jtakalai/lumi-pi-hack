@@ -1,8 +1,5 @@
 # MVP 1 — episode-scoped trajectory handoff: hardening + live smoke report
 
-Date: 2026-10-21 · Branch: `feat/mvp1-episode-handoff` (commit `7ad8deb` + smoke artifacts)
-Run host: `Aquila.local` (macOS), pi `1.3.0`
-
 ## 1. Scope of this milestone
 
 The first MVP slice of the project plan: `pi-handoff` (router), `pi-trajectory`
@@ -220,5 +217,6 @@ smoke was executed.
 - **Git identity:** commit author is still the auto-generated
   `Weixuan Ding <austin@Aquila.local>` — the pending identity fix (from the
   earlier request) is still open.
-- **Next slice:** `pi-ledger` (cost/tokens per episode & model from session
-  entries + `pitok`), then `benchmarks/` with explicit episode boundaries.
+- **Next slice:** `benchmarks/` arm comparison with explicit episode
+  boundaries. (`pi-ledger` was dropped from the project list; token/cost
+  accounting is covered by the standalone `pitok` session monitor.)
