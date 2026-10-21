@@ -1,5 +1,24 @@
 # trajectory-triggered escalation
 
+## Usage
+
+Make sure the `pi` CLI is installed and your provider credentials are
+configured as usual. Set the cheap and strong model IDs to models available in
+your Pi catalog, then start Pi with the local extensions:
+
+```bash
+./start.sh
+```
+
+Replace the model IDs with your provider's `provider/model-id` values. The
+script loads the extensions directly from this checkout and accepts additional
+Pi CLI arguments, for example `./start.sh --help`. The model IDs can also be
+set with `--handoff-cheap` and `--handoff-strong`, or in
+`extensions/pi-handoff/handoff.config.json` (see the example config).
+
+
+# Planning
+
 ## 1. Overall Goal
 
 Reduce the overall token consumption and inference cost of LLM agents executing heterogeneous, multi-hop workflows, while preserving task success and completion quality.
