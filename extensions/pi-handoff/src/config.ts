@@ -9,7 +9,10 @@
  * The lab harness sets these via env or flags per arm.
  *
  *   flag  --handoff-cheap / --handoff-strong / --handoff-threshold
- *   env   PI_HANDOFF_CHEAP / PI_HANDOFF_STRONG / PI_HANDOFF_THRESHOLD / PI_HANDOFF_WEIGHTS
+ *   env   PI_HANDOFF_CHEAP / PI_HANDOFF_STRONG / PI_HANDOFF_THRESHOLD /
+ *         PI_HANDOFF_WEIGHTS / PI_HANDOFF_CONFIG (explicit config file path;
+ *         when set, it replaces <pkg>/handoff.config.json — absent file means
+ *         "no file config", which is how the lab points at per-arm configs)
  *   file  handoff.config.json:
  *         { "cheap": "provider/model", "strong": "provider/model",
  *           "threshold": 4,
@@ -59,6 +62,8 @@ export const ENV = {
   strong: "PI_HANDOFF_STRONG",
   threshold: "PI_HANDOFF_THRESHOLD",
   weights: "PI_HANDOFF_WEIGHTS",
+  /** Explicit config file path; replaces `<pkg>/handoff.config.json` when set. */
+  config: "PI_HANDOFF_CONFIG",
 } as const;
 
 export const DEFAULT_THRESHOLD = 4;
@@ -81,8 +86,17 @@ function packageRoot(): string {
 export function readConfigFile(root: string = packageRoot()): ConfigFile | undefined {
   const p = join(root, "handoff.config.json");
   if (!existsSync(p)) return undefined;
-  const raw = readFileSync(p, "utf8");
-  const parsed: unknown = JSON.parse(raw);
+  return parseConfigFile(p);
+}
+
+/** Read an explicit config file path (PI_HANDOFF_CONFIG). Absent = no file. */
+export function readConfigFileAt(p: string): ConfigFile | undefined {
+  if (!existsSync(p)) return undefined;
+  return parseConfigFile(p);
+}
+
+function parseConfigFile(p: string): ConfigFile {
+  const parsed: unknown = JSON.parse(readFileSync(p, "utf8"));
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error(`pi-handoff: ${p} must contain a JSON object`);
   }
@@ -129,8 +143,9 @@ export interface ResolvedConfig {
 export function resolveConfig(source: ConfigSource): ResolvedConfig {
   const errors: string[] = [];
   let file: ConfigFile | undefined;
+  const explicitPath = asString(source.env[ENV.config]);
   try {
-    file = readConfigFile();
+    file = explicitPath !== undefined ? readConfigFileAt(explicitPath) : readConfigFile();
   } catch (e) {
     errors.push((e as Error).message);
   }

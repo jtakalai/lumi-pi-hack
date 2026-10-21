@@ -5,9 +5,14 @@
  * episode on a cheap model and — when accumulated trajectory risk (from
  * pi-trajectory, via the event bus) crosses a threshold — latches ONCE to a
  * strong model for the remainder of the episode. At a valid episode boundary
- * (from pi-episodes, via the event bus) the lock is released, risk is reset,
- * and the next episode starts on cheap. No downgrade within an unfinished
- * episode; full-context handoff (no summarization or transcript rewriting).
+ * the lock is released, risk is reset, and the next episode starts on cheap.
+ * Boundaries arrive two ways: the fast path is the `pi-handoff:boundary`
+ * bus event (pi-episodes); the authoritative path is the branch's persisted
+ * `pi-episodes:state` entry, reconciled on every model request, so a
+ * boundary recorded without an observed event (reload, recorded before the
+ * next request, branch change) still releases the lock. No downgrade within
+ * an unfinished episode; full-context handoff (no summarization or
+ * transcript rewriting).
  *
  * This is the only extension in the collection that dispatches models.
  *
@@ -34,6 +39,8 @@ import type {
 
 import {
   CHANNEL,
+  VIRTUAL_MODEL_STATE_ENTRY,
+  branchEpisodeAuthority,
   formatModelRef,
   type BoundaryEvent,
   type HandoffState,
@@ -41,7 +48,7 @@ import {
   type RiskEvent,
 } from "../../packages/shared/index.ts";
 import { FLAG, resolveConfig, type HandoffConfig, type ResolvedConfig } from "./src/config.ts";
-import { applyBoundary, applyRisk, initialHandoffState } from "./src/state-machine.ts";
+import { applyBoundary, applyRisk, initialHandoffState, reconcileEpisode } from "./src/state-machine.ts";
 
 const PROVIDER = "handoff";
 const ID = "auto";
@@ -75,6 +82,20 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
+  /**
+   * The branch's authoritative episode position (latest `pi-episodes:state`
+   * entry + position of the latest `pi.virtual-model-state` entry for this
+   * virtual model). Best-effort: if it can't be read, in-process bus events
+   * are the only source (no worse than before).
+   */
+  const readAuthority = (ctx: ExtensionContext) => {
+    try {
+      return branchEpisodeAuthority(ctx.sessionManager.getBranch(), VIRTUAL_MODEL_STATE_ENTRY, PROVIDER, ID);
+    } catch {
+      return null;
+    }
+  };
+
   const statusLine = (): void => {
     try {
       const theta = loadConfig().config?.threshold;
@@ -103,6 +124,19 @@ export default function (pi: ExtensionAPI) {
     pendingRisk.length = 0;
     configWarned = false;
     cfgCache = undefined; // allow env/flag/config changes between sessions
+  });
+
+  // Branch/tree navigation: the in-memory working state belongs to the old
+  // branch. Drop it so it can't leak into a branch that has no persisted
+  // router state of its own; the next route() restores the target branch's
+  // state from the session (request.state) and reconciles against its
+  // episode record.
+  pi.on("session_tree", (_event, ctx) => {
+    lastCtx = ctx;
+    current = initialHandoffState(null);
+    pendingBoundary = null;
+    pendingRisk.length = 0;
+    statusLine();
   });
 
   // Risk features from pi-trajectory (or a future pi-trajectory alternative).
@@ -146,6 +180,21 @@ export default function (pi: ExtensionAPI) {
       // Branch-persisted state wins (source of truth across reloads and
       // forks); direct requests carry no state and use the working state.
       let state: HandoffState = request.state ?? current;
+
+      // The branch's persisted episode record is authoritative over
+      // in-process bus state. If a boundary was recorded without this
+      // process observing the event (reload, boundary recorded before the
+      // next model request, branch navigation), release from entries alone.
+      const rec = reconcileEpisode(state, readAuthority(ctx));
+      state = rec.state; // same reference unless the episode id was adopted or a boundary applied
+      if (rec.boundary) {
+        current = state;
+        emitState("boundary");
+        notify(
+          `pi-handoff: branch is on episode ${state.episodeId} — releasing strong-model lock from persisted episode state (boundary event not observed this process)`,
+        );
+        statusLine();
+      }
 
       if (pendingBoundary !== null) {
         state = applyBoundary(state, pendingBoundary);

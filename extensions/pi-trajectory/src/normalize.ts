@@ -57,3 +57,16 @@ export function normalizeErrorText(text: string): string {
 export function errorSignature(text: string): string {
   return fnv1a(normalizeErrorText(text));
 }
+
+/**
+ * Collapse command output to a stable "observable task state" signature.
+ * Reuses the error-text normalization (addresses/numbers/paths/case/
+ * whitespace collapsed, tail kept), so the SAME normalized output hashes
+ * alike across runs while ANY structurally changed output hashes
+ * differently. This is the MVP's lightweight approximation of "observable
+ * improvement": a successful command that prints the same thing again did
+ * not change task state.
+ */
+export function outputSignature(text: string): string {
+  return fnv1a(normalizeErrorText(text));
+}

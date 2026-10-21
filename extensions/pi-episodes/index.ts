@@ -12,16 +12,21 @@
  *        a marker at the start of a longer message fires the boundary while
  *        the message itself is still delivered.
  *   2. User-issued commands: /episode next, /episode reset.
- *   3. Documented conversational default: an agent run that has settled
- *      followed by a new user task. Toggle with PI_EPISODES_USER_TURN=0.
+ *   3. Opt-in conversational convenience (OFF by default): an agent run
+ *      that has settled followed by a new user task. Enable with
+ *      PI_EPISODES_USER_TURN=1. Benchmark runs must use explicit episode
+ *      boundaries (mechanisms 1–2), not this policy.
  *
  * The MVP uses deterministic, explicit boundaries only — no automatic
  * semantic subtask segmentation (explicitly out of scope).
  *
  * Episode ids are `ep-<n>`: a session starts in episode ep-1 (no boundary
  * event for it); every boundary starts the next episode. The counter is
- * persisted as a `pi-episodes:state` custom session entry, so it survives
- * reloads and resume.
+ * persisted as a `pi-episodes:state` custom session entry, which is the
+ * AUTHORITATIVE episode identity per branch: it survives reloads, resume,
+ * and branch navigation (restored on session_start and session_tree), and
+ * pi-handoff reconciles against it on every model request — the event bus
+ * is only a notification mechanism.
  *
  * Commands:
  *   /episode next     end the current episode, start the next one
@@ -31,24 +36,18 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { CHANNEL, type BoundaryEvent, type BoundaryKind } from "../../packages/shared/index.ts";
+import {
+  CHANNEL,
+  EPISODES_STATE_ENTRY,
+  latestEpisodeState,
+  type BoundaryEvent,
+  type BoundaryKind,
+} from "../../packages/shared/index.ts";
 
-export const ENTRY_TYPE = "pi-episodes:state";
+export { EPISODES_STATE_ENTRY };
 export const DEFAULT_MARKER = /^\s*\[episode\s*:\s*(next|new|done)\s*\]/;
 /** A message that is exactly a marker (no task text) — consumed, no agent run. */
 export const STANDALONE_MARKER = /^\s*\[episode\s*:\s*(next|new|done)\s*\]\s*$/;
-
-interface Persisted {
-  counter: number;
-  episodeId: string;
-  kind?: BoundaryKind;
-  reason?: string;
-  t?: string;
-}
-
-export function nextEpisodeId(counter: number): string {
-  return `ep-${counter}`;
-}
 
 export default function (pi: ExtensionAPI) {
   let counter = 1;
@@ -56,11 +55,30 @@ export default function (pi: ExtensionAPI) {
   let awaitingNewTask = false;
   let lastCtx: ExtensionContext | undefined;
   const counts: Record<BoundaryKind, number> = { marker: 0, command: 0, user_turn: 0 };
-  const userTurnPolicy = process.env.PI_EPISODES_USER_TURN !== "0";
+  // Explicit boundaries are the default (benchmarks). The conversational
+  // user-turn policy is opt-in: PI_EPISODES_USER_TURN=1.
+  const userTurnPolicy = process.env.PI_EPISODES_USER_TURN === "1";
   const markerRe = compileMarker(process.env.PI_EPISODES_MARKER);
 
   function current(): string {
     return episodeId;
+  }
+
+  /**
+   * Re-derive the episode counter from the branch's persisted entries.
+   * The entries are authoritative; the in-memory counter only caches them
+   * between events. A fresh branch (no entries) stays in ep-1.
+   */
+  function restoreFromBranch(ctx: ExtensionContext): void {
+    try {
+      const persisted = latestEpisodeState(ctx.sessionManager.getBranch());
+      if (persisted) {
+        counter = persisted.counter;
+        episodeId = persisted.episodeId;
+      }
+    } catch {
+      // no session manager available — keep the in-memory counter
+    }
   }
 
   function statusLine(): string {
@@ -80,9 +98,15 @@ export default function (pi: ExtensionAPI) {
     counter += 1;
     episodeId = nextEpisodeId(counter);
     counts[kind] += 1;
-    const data: Persisted = { counter, episodeId, kind, reason, t: new Date().toISOString() };
+    const data: { counter: number; episodeId: string; kind: BoundaryKind; reason?: string; t: string } = {
+      counter,
+      episodeId,
+      kind,
+      reason,
+      t: new Date().toISOString(),
+    };
     try {
-      pi.appendEntry(ENTRY_TYPE, data);
+      pi.appendEntry(EPISODES_STATE_ENTRY, data);
     } catch {
       // persistence is best-effort; the in-process counter is authoritative
     }
@@ -91,24 +115,21 @@ export default function (pi: ExtensionAPI) {
     setStatus();
   }
 
-  pi.on("session_start", (event, ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     lastCtx = ctx;
     awaitingNewTask = false;
-    if (event.reason === "resume" || event.reason === "reload") {
-      // Restore the episode counter from the latest persisted entry on the branch.
-      const branch = ctx.sessionManager.getBranch();
-      for (let i = branch.length - 1; i >= 0; i--) {
-        const entry = branch[i];
-        if (entry.type === "custom" && entry.customType === ENTRY_TYPE && entry.data) {
-          const d = entry.data as Persisted;
-          if (typeof d.counter === "number" && typeof d.episodeId === "string") {
-            counter = d.counter;
-            episodeId = d.episodeId;
-          }
-          break;
-        }
-      }
-    }
+    // Always re-derive from the branch: fresh sessions have no entries
+    // (no-op), resume/reload/switch restore the persisted counter.
+    restoreFromBranch(ctx);
+    setStatus();
+  });
+
+  // Tree/branch navigation: the new branch's persisted entries are the
+  // authoritative episode identity for it — re-derive on navigation.
+  pi.on("session_tree", (_event, ctx) => {
+    lastCtx = ctx;
+    awaitingNewTask = false;
+    restoreFromBranch(ctx);
     setStatus();
   });
 
@@ -153,6 +174,10 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(statusLine(), "info");
     },
   });
+}
+
+function nextEpisodeId(counter: number): string {
+  return `ep-${counter}`;
 }
 
 function compileMarker(envRe: string | undefined): RegExp {

@@ -7,8 +7,9 @@ accumulated risk is reset.
 
 A session starts in episode `ep-1` (no boundary event for it). Every boundary
 starts the next episode; `ep-<n>` ids are handed to pi-handoff via the
-`pi-handoff:boundary` event-bus channel and to the (future) pi-ledger via the
-persisted session entry.
+`pi-handoff:boundary` event-bus channel **and** via the persisted session
+entry (the authoritative record — see Persistence below), and to the (future)
+pi-ledger via the same entry.
 
 ## Boundary mechanisms
 
@@ -23,9 +24,11 @@ In priority order (project plan §3.3), deterministic and explicit only:
      message (marker included) is delivered to the model.
 2. **User-issued commands**: `/episode next`, `/episode reset`
    (alias). `/episode status` shows the current episode and counts.
-3. **Conversational default policy**: an agent run that has *settled*
-   followed by a *new user task* starts a new episode. Off with
-   `PI_EPISODES_USER_TURN=0`.
+3. **Opt-in conversational convenience (OFF by default)**: an agent run that
+   has *settled* followed by a *new user task* starts a new episode. Enable
+   with `PI_EPISODES_USER_TURN=1`. **Benchmark runs must not use this** —
+   use explicit episode boundaries (mechanisms 1–2) so episode segments are
+   deterministic and reproducible.
 
 Automatic semantic subtask segmentation is **out of scope**: for
 single-prompt autonomous workflows without explicit intermediate boundaries,
@@ -36,14 +39,27 @@ the strong-model lock simply stays active until the whole episode completes.
 | Var | Default | Meaning |
 |---|---|---|
 | `PI_EPISODES_MARKER` | `^\s*\[episode\s*:\s*(next\|new\|done)\s*\]` | regex, marker at start of a message |
-| `PI_EPISODES_USER_TURN` | on | mechanism 3 toggle |
+| `PI_EPISODES_USER_TURN` | off | opt-in for mechanism 3 (`=1` enables) |
 
-## Persistence
+## Persistence (authoritative episode identity)
 
 Each boundary appends a `pi-episodes:state` custom entry
-(`{counter, episodeId, kind, reason, t}`) to the session. On `resume`/`reload`
-the counter is restored from the latest such entry on the active branch, so
-episode ids stay stable across reloads and per branch.
+(`{counter, episodeId, kind, reason, t}`) to the session **before** the
+boundary event is emitted. These entries are the **authoritative record of
+which episode a branch is in** — the bus event is only a notification:
+
+- On `session_start` (fresh, resume, reload, switch) and on `session_tree`
+  (branch navigation) the counter is re-derived from the latest entry on the
+  active branch, so episode ids stay stable across reloads and per branch.
+- pi-handoff reconciles its routing state against the same entries on every
+  model request (`branchEpisodeAuthority` + `reconcileEpisode` in
+  [`packages/shared`](../../packages/shared/) and
+  `extensions/pi-handoff/src/state-machine.ts`): a boundary whose event this
+  process never observed (recorded before the next model request, lost in a
+  reload) still releases the strong-model lock, from branch entries alone.
+  Entry order decides staleness: a boundary entry that sits *after* the
+  branch's latest `pi.virtual-model-state` entry postdates the last persisted
+  routing state.
 
 ## Load
 

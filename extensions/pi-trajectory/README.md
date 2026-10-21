@@ -13,13 +13,21 @@ the `u_t` features, pi-handoff accumulates them and decides.
 |---|---|
 | `repeated_failure` | A normalized failure signature (command + error tail, or tool + error tail) appears a 2nd time (default) |
 | `edit_churn` | A 3rd (default) successful `edit`/`write` to the same file |
-| `stalled_progress` | A 3rd (default) repetition of the same non-read-only action |
+| `stalled_progress` | A 3rd (default) repetition of the same non-read-only action — including a command that succeeds again with identical output |
 
-**Progress** (MVP approximation of "measurable improvement"): a *successful
-command execution* (`bash`/`powershell` exit 0) — the proxy for tests/build
-passing. Successful edits and reads are not progress: an edit cannot be its
-own improvement, and reading is exploration. All windows reset on progress
-and on episode boundaries (`pi-handoff:boundary` events from pi-episodes).
+**Progress** (MVP approximation of *observable improvement in task state*):
+a *successful command execution* (`bash`/`powershell` exit 0) **whose
+normalized output changed** since its previous success. The first success
+establishes the baseline and counts as progress. A command that succeeds
+again with *identical* normalized output is successful execution, not
+observable improvement — it does **not** reset the windows and instead
+accumulates toward `stalled_progress` like any repeated action (a model
+spinning on the same passing test / same `ls` / same build log is a stuck
+trajectory). This keeps the heuristic lightweight: no file watching, no
+diffing — just "did what the command printed change?". Successful edits and
+reads are not progress: an edit cannot be its own improvement, and reading is
+exploration. All windows reset on progress and on episode boundaries
+(`pi-handoff:boundary` events from pi-episodes).
 
 Normalization is deliberately crude but deterministic: quoted strings, paths,
 and numbers in commands and error tails become placeholders before hashing

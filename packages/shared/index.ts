@@ -95,6 +95,117 @@ export interface BoundaryEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Persisted episode state (pi-episodes -> everyone)
+// ---------------------------------------------------------------------------
+
+/**
+ * Custom session entry type on which pi-episodes persists the current
+ * episode of a session branch.
+ *
+ * This entry is the AUTHORITATIVE record of which episode a branch is in.
+ * The `CHANNEL.boundary` bus event is only a notification mechanism: it is
+ * per-process and can be missed (process reload, boundary recorded before
+ * the next model request, branch navigation). Extensions must be able to
+ * derive boundary state from these entries alone.
+ */
+export const EPISODES_STATE_ENTRY = "pi-episodes:state";
+
+/**
+ * pi's custom entry type for virtual-model router state (mirrors
+ * `VIRTUAL_MODEL_STATE_ENTRY` from @earendil-works/pi-coding-agent; the
+ * collection cannot value-import pi at runtime, so the string is kept here
+ * and must be kept in sync when pi changes it).
+ */
+export const VIRTUAL_MODEL_STATE_ENTRY = "pi.virtual-model-state";
+
+/** Data of an `pi-episodes:state` custom session entry. */
+export interface EpisodesStateData {
+  /** Monotonic episode counter on this branch (1-based; ep-1 has no entry). */
+  counter: number;
+  /** Canonical episode id (`ep-<counter>`). */
+  episodeId: string;
+  /** Boundary kind that started the episode. */
+  kind?: BoundaryKind;
+  /** Human-readable reason (diagnostics). */
+  reason?: string;
+  /** ISO timestamp of the boundary. */
+  t?: string;
+}
+
+/** Structural subset of pi's SessionEntry, so test fakes work. */
+export interface SessionEntryLike {
+  type: string;
+  customType?: string;
+  data?: unknown;
+}
+
+/**
+ * The latest persisted episode state on a branch, or null when the branch
+ * has no entry (a fresh session starts in episode 1 without an entry).
+ * Scans newest-first, skipping malformed entries.
+ */
+export function latestEpisodeState(branch: readonly SessionEntryLike[]): EpisodesStateData | null {
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const e = branch[i];
+    if (e?.type !== "custom" || e.customType !== EPISODES_STATE_ENTRY) continue;
+    const d = e.data as EpisodesStateData | undefined;
+    if (d && typeof d.counter === "number" && typeof d.episodeId === "string") {
+      return d;
+    }
+  }
+  return null;
+}
+
+/**
+ * The branch's authoritative episode position, for boundary reconciliation.
+ *
+ * Combines the latest `pi-episodes:state` entry with the position of the
+ * latest router-state entry (`virtualModelStateEntry`, e.g. pi's
+ * `pi.virtual-model-state` for this virtual model). Entry order on the
+ * branch is what makes "did this boundary happen before or after the last
+ * persisted routing state?" answerable from the branch alone.
+ */
+export interface BranchEpisodeAuthority {
+  /** Latest persisted episode on the branch (null when none). */
+  episode: EpisodesStateData | null;
+  /**
+   * True when a router-state entry for (provider, modelId) sits AFTER the
+   * latest episode entry on the branch — i.e. the last persisted routing
+   * state postdates the last recorded boundary. Undefined when the branch
+   * has no router-state entry for that virtual model.
+   */
+  routerStateAfterLatestEpisode?: boolean;
+}
+
+export function branchEpisodeAuthority(
+  branch: readonly SessionEntryLike[],
+  virtualModelStateEntry: string,
+  provider: string,
+  modelId: string,
+): BranchEpisodeAuthority {
+  let epIdx = -1;
+  let vmIdx = -1;
+  let episode: EpisodesStateData | null = null;
+  for (let i = 0; i < branch.length; i++) {
+    const e = branch[i];
+    if (e?.type !== "custom") continue;
+    if (e.customType === EPISODES_STATE_ENTRY) {
+      const d = e.data as EpisodesStateData | undefined;
+      if (d && typeof d.counter === "number" && typeof d.episodeId === "string") {
+        epIdx = i;
+        episode = d;
+      }
+    } else if (e.customType === virtualModelStateEntry) {
+      const d = e.data as { provider?: string; modelId?: string } | undefined;
+      if (d?.provider === provider && d?.modelId === modelId) vmIdx = i;
+    }
+  }
+  const out: BranchEpisodeAuthority = { episode };
+  if (vmIdx !== -1 && epIdx !== -1) out.routerStateAfterLatestEpisode = vmIdx > epIdx;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Handoff state (pi-handoff)
 // ---------------------------------------------------------------------------
 
