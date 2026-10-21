@@ -16,6 +16,15 @@ Pi CLI arguments, for example `./start.sh --help`. The model IDs can also be
 set with `--handoff-cheap` and `--handoff-strong`, or in
 `extensions/pi-handoff/handoff.config.json` (see the example config).
 
+The script also loads [pi-ledger](extensions/pi-ledger/), the token and
+handoff accountant: `/ledger status` shows live per-model and per-episode
+tokens, escalations and cost; `/ledger report [PATH]` writes `PATH.jsonl`
+(per-episode + workflow) and `PATH.csv` (per-model) for offline analysis.
+
+Note: the pi-handoff router uses `pi.registerVirtualModel`, which needs
+pi ≥ 1.0 (the typecheck is pinned against pi 1.3.0, see `tsconfig.json`).
+pi-trajectory, pi-episodes and pi-ledger load on older pi versions too.
+
 
 # Planning
 
@@ -251,6 +260,11 @@ pi-handoff/
 └── README.md
 ```
 
+Status: extensions A–D (pi-handoff, pi-trajectory, pi-episodes, pi-ledger)
+are implemented and covered by the deterministic tests in `test/`; `pitok/`
+(offline session token accounting) sits next to them. `benchmarks/`
+(component E, the evaluation harness) and `examples/` are not started yet.
+
 Extensions share small, documented event and data contracts. They should not each register competing model routers.
 
 For the first working prototype, the core router can implement minimal signal extraction and boundary handling internally. Extraction into separate packages should happen once the interfaces are stable.
@@ -396,9 +410,9 @@ The intended contribution is a compact, interpretable and experimentally validat
 
 ### 8. Running Tests
 
-#### 8.1 TypeScript Extension Deterministic Tests (`pi-handoff`, `pi-trajectory`, `pi-episodes`)
+#### 8.1 TypeScript Extension Deterministic Tests (`pi-handoff`, `pi-trajectory`, `pi-episodes`, `pi-ledger`)
 
-Run the scripted suite verifying state transitions, trajectory risk observation, and boundary controls using a mocked Pi runtime:
+Run the scripted suite verifying state transitions, trajectory risk observation, boundary controls, and token/handoff accounting using a mocked Pi runtime:
 
 ```bash
 npm test

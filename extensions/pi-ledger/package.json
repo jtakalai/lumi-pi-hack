@@ -1,0 +1,18 @@
+{
+  "name": "pi-ledger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Token and handoff accounting for the pi-handoff collection (Plan C, component D)",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

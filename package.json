@@ -5,7 +5,7 @@
   "type": "module",
   "description": "pi-handoff collection: trajectory-triggered one-way model escalation for pi",
   "scripts": {
-    "test": "tsx test/smoke.ts && tsx test/scenarios.ts",
+    "test": "tsx test/smoke.ts && tsx test/scenarios.ts && tsx test/ledger.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
