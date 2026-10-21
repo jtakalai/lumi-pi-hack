@@ -1,0 +1,20 @@
+{
+  "name": "pi-trajectory",
+  "version": "0.1.0",
+  "description": "Execution signal observer for pi trajectory diagnostics",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0"
+  }
+}

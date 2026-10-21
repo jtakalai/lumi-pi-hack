@@ -373,3 +373,82 @@ The intended contribution is a compact, interpretable and experimentally validat
 **Papers (abstracts via search)**
 
 - [TACIT-Switch](https://arxiv.org/pdf/2608.27911)
+
+
+# Changelog
+
+## [0.1.0] - 2026-10-21
+
+### Added
+
+Initial implementation of the trajectory-triggered escalation system with four core extensions:
+
+#### pi-handoff (Core Router)
+- Virtual model `handoff/auto` that implements trajectory-based escalation policy
+- Tracks accumulated execution risk across three signal types:
+  - Repeated failures (normalized error patterns)
+  - Edit churn (repeated file modifications without progress)
+  - Stalled progress (many tool calls without user interaction)
+- One-way escalation from cheap to strong model within episodes
+- Configurable via environment variables:
+  - `PI_HANDOFF_THRESHOLD` - risk threshold for escalation (default: 1.0)
+  - `PI_HANDOFF_WEIGHT_FAILURE` - weight for repeated failure signal (default: 0.4)
+  - `PI_HANDOFF_WEIGHT_CHURN` - weight for edit churn signal (default: 0.3)
+  - `PI_HANDOFF_WEIGHT_STALLED` - weight for stalled progress signal (default: 0.3)
+  - `PI_HANDOFF_CHEAP_MODEL` - physical model for cheap tier (default: anthropic/claude-3-5-haiku-latest)
+  - `PI_HANDOFF_STRONG_MODEL` - physical model for strong tier (default: anthropic/claude-sonnet-4-5)
+
+#### pi-trajectory (Execution Signal Observer)
+- Observes tool calls, tool results, and edit operations
+- Computes trajectory-risk features without LLM calls
+- Exposes trajectory diagnostics via commands:
+  - `/trajectory` - view current episode diagnostics
+  - `/trajectory-reset` - clear trajectory data
+- Provides API for other extensions to read trajectory signals
+
+#### pi-episodes (Workflow Boundary Controller)
+- Manages episode lifecycle with automatic ID generation
+- Provides manual episode control commands:
+  - `/handoff next` - finalize current episode and start new one
+  - `/handoff reset` - clear all episode state and start fresh
+  - `/handoff status` - show current episode details
+  - `/handoff list` - list all recorded episodes
+- Tracks request counts per episode (cheap vs strong)
+- Records escalation events for evaluation
+
+#### pi-ledger (Token and Handoff Accounting)
+- Attributes usage to Cheap and Strong models
+- Tracks input, output, cache-read, and cache-write tokens
+- Calculates API cost using recorded prices
+- Identifies handoff events and model transitions
+- Exports comprehensive telemetry:
+  - `/ledger summary` - display usage statistics
+  - `/ledger export` - export JSON data for analysis
+  - `/ledger reset` - clear ledger data
+- Provides metrics including:
+  - Total tokens and cost by tier
+  - Tokens before handoff
+  - Average cost per episode
+
+#### Shared Types Module
+- Common TypeScript interfaces for trajectory signals, episodes,tokens, and handoff events
+- Reusable types across all pi-handoff extensions
+
+### Architecture
+
+The implementation follows the README's repository organization:
+- `pi-handoff/` - Core router extension
+- `pi-trajectory/` - Signal observer extension  
+- `pi-episodes/` - Boundary controller extension
+- `pi-ledger/` - Telemetry and accounting extension
+- `shared/` - Common types and utilities
+
+Each extension is packaged as a Pi package with `pi` field in `package.json` pointing to the extension file.
+
+### Future Work
+
+- pi-handoff-lab evaluation harness for benchmarking
+- Multi-hop workflow demonstration
+- TACIT-Switch inspired threshold calibration
+- Automated benchmark runner for ablation studies
+

@@ -1,8 +1,7 @@
 {
   "name": "pi-handoff",
   "version": "0.1.0",
-  "private": true,
-  "description": "Trajectory-triggered one-way model escalation for pi (Plan C scaffold)",
+  "description": "Trajectory-triggered one-way model escalation for pi",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -14,5 +13,8 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0"
   }
 }

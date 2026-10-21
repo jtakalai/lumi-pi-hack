@@ -1,0 +1,20 @@
+{
+  "name": "pi-ledger",
+  "version": "0.1.0",
+  "description": "Token and handoff accounting for pi",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0"
+  }
+}
