@@ -7,6 +7,7 @@
 #   PI_HANDOFF_STRONG="anthropic/claude-opus-4-5"
 #   PI_HANDOFF_THRESHOLD=4
 #   PI_HANDOFF_WEIGHTS="1,1,1"     # repeated_failure,edit_churn,stalled_progress
+#   PI_HANDOFF_CONFIG=/path/to/this.json   # point at this file explicitly
 #
 #   pi -e ./extensions/pi-handoff/index.ts \
 #      --handoff-cheap anthropic/claude-haiku-4-5 \
@@ -16,6 +17,11 @@
 #
 # Precedence per field: CLI flag > env > this file > defaults
 # (defaults: threshold 4, weights all 1; cheap/strong have NO default).
+#
+# The MVP smoke run on the hackathon box used:
+#   "cheap":  "compat-custom/mistralai/Ministral-3-14B-Reasoning-2512" (thinking off)
+#   "strong": "hackathon-H200/Qwen/Qwen3.8-27B-FP8" (thinking high)
+# (model ids containing slashes are fine: refs split on the first slash only)
 
 {
   "cheap": "anthropic/claude-haiku-4-5",

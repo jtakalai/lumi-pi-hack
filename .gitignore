@@ -1,2 +1,4 @@
 .env
 node_modules/
+# Local machine config (no secrets, but machine-specific). See the .example.
+extensions/pi-handoff/handoff.config.json

@@ -42,6 +42,13 @@ export default function (pi: ExtensionAPI) {
     observer.reset(null);
   });
 
+  // Branch/tree navigation: observation windows belong to the old branch's
+  // episode. Drop them; the target branch resumes via its next boundary
+  // event (or stays unassigned until one arrives).
+  pi.on("session_tree", (_event, _ctx) => {
+    observer.reset(null);
+  });
+
   // Episode boundaries (from pi-episodes, or pi-handoff's standalone reset):
   // start a fresh observation window.
   pi.events.on(CHANNEL.boundary, (data) => {

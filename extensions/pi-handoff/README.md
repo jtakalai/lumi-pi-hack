@@ -11,6 +11,13 @@ episode; at a valid **episode boundary** (produced by
 downgrade within an unfinished episode; full-context handoff (no
 summarization, no transcript rewriting).
 
+Boundaries reach the router two ways: the fast path is the
+`pi-handoff:boundary` bus event; the **authoritative** path is the branch's
+persisted `pi-episodes:state` entry, which pi-handoff reconciles against on
+every model request. So a boundary whose event this process never observed
+(process reload, boundary recorded before the next model request, branch
+navigation) still releases the lock, from branch entries alone.
+
 ## The virtual model
 
 Select `handoff/auto` (`/model handoff/auto` or `--model handoff/auto`).
@@ -23,6 +30,15 @@ CHEAP ──R_t >= θ──▶ STRONG_LOCKED ──episode boundary──▶ CHE
 - **State persistence:** the state machine state is the virtual model's
   router state — pi stores it on the session branch (per branch, survives
   compaction, follows `/tree` forks) and returns it as `request.state`.
+- **Boundary reconciliation:** on every model request the router compares
+  its state with the branch's authoritative episode record (latest
+  `pi-episodes:state` entry + the position of the latest
+  `pi.virtual-model-state` entry for this virtual model, in
+  [`packages/shared`](../../packages/shared/)). If the boundary record
+  postdates the last persisted routing state, the boundary is applied from
+  the entries alone — releasing the lock and resetting risk, with the
+  escalation count preserved and a `pi-handoff:state` (reason `boundary`)
+  event emitted.
 - **Retry safety:** automatic retries keep the physical model that failed,
   preserving prompt-cache and thinking signatures.
 - **Durable record:** every state change is also emitted on the
@@ -42,7 +58,12 @@ Cheap and strong models have **no defaults** — configure exactly one pair:
 | threshold θ (>= 1, default 4) | `--handoff-threshold` | `PI_HANDOFF_THRESHOLD` | `threshold` |
 | weights (default 1,1,1) | — | `PI_HANDOFF_WEIGHTS` (`"1,1,1"` or JSON) | `weights` |
 
-Precedence: flag > env > `handoff.config.json` (package root, see
+`PI_HANDOFF_CONFIG=<path>` points at an explicit config file and **replaces**
+`<pkg>/handoff.config.json` (an absent file then simply means "no file
+config") — this is how the lab harness pins per-arm configs.
+
+Precedence: flag > env > config file (explicit `PI_HANDOFF_CONFIG` path, or
+`handoff.config.json` in the package root — see
 `handoff.config.json.example`) > defaults. Model refs split on the first
 slash, so `openrouter/anthropic/claude-...` works. The router refuses to
 route until both models are configured and present in the catalog.

@@ -14,7 +14,7 @@
  * directly in deterministic tests.
  */
 
-import type { HandoffState, RiskEvent, RiskWeights } from "../../../packages/shared/index.ts";
+import type { BranchEpisodeAuthority, HandoffState, RiskEvent, RiskWeights } from "../../../packages/shared/index.ts";
 
 export function initialHandoffState(episodeId: string | null): HandoffState {
   return { phase: "CHEAP", risk: 0, episodeId, escalations: 0 };
@@ -70,4 +70,36 @@ export function applyRisk(
  */
 export function applyBoundary(state: HandoffState | null | undefined, episodeId: string): HandoffState {
   return { phase: "CHEAP", risk: 0, episodeId, escalations: state?.escalations ?? 0 };
+}
+
+/**
+ * Reconcile handoff state with the branch's authoritative episode record
+ * (see {@link BranchEpisodeAuthority}).
+ *
+ * The event bus is only a notification mechanism. This is the recovery path
+ * for boundaries whose event this process never observed — a process
+ * reload, a boundary recorded before the next model request, or branch
+ * navigation. Branch entry order decides whether the boundary predates or
+ * postdates the last persisted routing state:
+ *
+ * - no persisted episode (pi-episodes not loaded, or branch before ep-2):
+ *   unchanged, same reference.
+ * - ids match: unchanged, same reference (identity = persistence no-op).
+ * - state id null AND the routing state postdates the latest episode entry:
+ *   the state already reflects the boundary, only the id was never
+ *   assigned — adopt the id without resetting.
+ * - otherwise (boundary recorded after this state, or a different known
+ *   episode id): apply the boundary — release the lock, reset risk.
+ */
+export function reconcileEpisode(
+  state: HandoffState,
+  authority: BranchEpisodeAuthority | null | undefined,
+): { state: HandoffState; boundary: boolean } {
+  const episode = authority?.episode ?? null;
+  if (!episode) return { state, boundary: false };
+  if (state.episodeId === episode.episodeId) return { state, boundary: false };
+  if (state.episodeId === null && authority?.routerStateAfterLatestEpisode === true) {
+    return { state: { ...state, episodeId: episode.episodeId }, boundary: false };
+  }
+  return { state: applyBoundary(state, episode.episodeId), boundary: true };
 }

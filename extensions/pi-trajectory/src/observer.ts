@@ -18,10 +18,16 @@
  *   churn signal is the dedicated one, and double-counting every 3rd edit
  *   as both would make the two features collinear.
  *
- * Progress (MVP approximation of "measurable improvement"): a successful
- * command execution (bash/powershell exit 0) — the proxy for "tests/build
- * pass". Successful edits and reads are NOT progress, by design: an edit
- * cannot be its own improvement, and reading is exploration.
+ * Progress (MVP approximation of "observable improvement in task state"):
+ * a successful command execution whose normalized output CHANGED since its
+ * previous success (first success = baseline, counts as progress). This
+ * deliberately distinguishes successful execution from observable
+ * improvement: a command that succeeds again with identical output (the
+ * same test run, the same `ls`, the same build log) did not move the task
+ * forward — it does not reset the windows and instead counts toward
+ * stalled_progress like any repeated action. Successful edits and reads are
+ * NOT progress, by design: an edit cannot be its own improvement, and
+ * reading is exploration.
  *
  * Overlap is intentional for command actions: a failing command repeated
  * 3+ times fires both repeated_failure (2nd time) and stalled_progress
@@ -30,7 +36,7 @@
 
 import type { RiskEvent, RiskFeature } from "../../../packages/shared/index.ts";
 
-import { errorSignature, fnv1a, normalizeCommand } from "./normalize.ts";
+import { errorSignature, fnv1a, normalizeCommand, outputSignature } from "./normalize.ts";
 
 export interface TrajectoryConfig {
   /** A failure signature fires when seen this many times without progress (default 2). */
@@ -79,6 +85,8 @@ export class TrajectoryObserver {
   private readonly failSinceProgress = new Map<string, number>();
   private readonly actionSinceProgress = new Map<string, number>();
   private readonly editsSinceProgress = new Map<string, number>();
+  /** Last normalized output per command signature — the "observable state" baseline. */
+  private readonly lastCommandOutput = new Map<string, string>();
   private readonly timeline: TimelineEvent[] = [];
   private totals = { failures: 0, repeatedFailures: 0, churnEdits: 0, stalls: 0, progress: 0 };
 
@@ -113,6 +121,7 @@ export class TrajectoryObserver {
     this.failSinceProgress.clear();
     this.actionSinceProgress.clear();
     this.editsSinceProgress.clear();
+    this.lastCommandOutput.clear();
     this.record("boundary", { episodeId });
   }
 
@@ -132,14 +141,27 @@ export class TrajectoryObserver {
       .map((c) => c.text)
       .join("\n");
 
-    // Task-level progress: successful command execution. Resets all windows.
+    // Observable task-state improvement: a successful command whose
+    // normalized output changed since its previous success. The first
+    // success establishes the baseline and counts as progress (it resets
+    // all windows). A success repeating the identical output is execution
+    // WITHOUT observable improvement: it does not reset the windows and
+    // falls through to the stalled-progress counting below, where its
+    // repetition is what it looks like — an action repeating in place.
     if (!isError && COMMAND_TOOLS.has(toolName)) {
-      this.failSinceProgress.clear();
-      this.actionSinceProgress.clear();
-      this.editsSinceProgress.clear();
-      this.totals.progress++;
-      this.record("progress", { tool: toolName });
-      return out;
+      const csig = commandSignature(toolName, input);
+      const osig = outputSignature(text);
+      const baseline = this.lastCommandOutput.get(csig);
+      this.lastCommandOutput.set(csig, osig);
+      if (baseline !== osig) {
+        this.failSinceProgress.clear();
+        this.actionSinceProgress.clear();
+        this.editsSinceProgress.clear();
+        this.totals.progress++;
+        this.record("progress", { tool: toolName, signature: csig });
+        return out;
+      }
+      // identical output: no observable improvement — keep counting below
     }
 
     // Repeated failure: same normalized failure signature reappearing.

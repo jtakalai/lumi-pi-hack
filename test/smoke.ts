@@ -38,7 +38,7 @@ function makeBus() {
       return () => {
         const a = listeners.get(channel);
         const i = a?.indexOf(handler) ?? -1;
-        if (i >= 0) a.splice(i, 1);
+        if (i >= 0 && a) a.splice(i, 1);
       };
     },
     emit(channel: string, data: unknown): void {
@@ -126,9 +126,13 @@ async function dispatch(m: MockPi, name: string, event: any, ctx: any): Promise<
 }
 
 /** Emulate pi's virtual-model state persistence: a returned state (that is
- * not the request's own state reference) becomes the branch state. */
-function makeRouter(m: MockPi, ctx: any) {
-  let persisted: any = undefined;
+ * not the request's own state reference) becomes the branch state AND is
+ * recorded as a `pi.virtual-model-state` session entry (appendTarget), the
+ * same way pi stores it on the session branch. `initialPersisted` simulates
+ * a state pi restored from the branch after a reload / branch switch. */
+function makeRouter(m: MockPi, ctx: any, initialPersisted?: any, appendTarget?: () => any[]) {
+  const target = appendTarget ?? (() => m.entries);
+  let persisted: any = initialPersisted;
   return {
     route(reason: string, extra: Record<string, unknown> = {}) {
       const request = {
@@ -140,7 +144,14 @@ function makeRouter(m: MockPi, ctx: any) {
         ...extra,
       };
       const out = m.virtualModel.route(request, ctx);
-      if (out.state !== undefined && out.state !== request.state) persisted = out.state;
+      if (out.state !== undefined && out.state !== request.state) {
+        persisted = out.state;
+        target().push({
+          type: "custom",
+          customType: "pi.virtual-model-state",
+          data: { provider: "handoff", modelId: "auto", state: persisted },
+        });
+      }
       return { out, request };
     },
     get persisted() {
@@ -225,6 +236,42 @@ const FAIL_TEXT = "npm ERR! Test suite failed\nError: 3 of 12 tests failed (see 
 
   check("C4 progress (bash ok) resets windows", obs.observe("bash", { command: "npm test" }, false, [{ type: "text", text: "12 passing" }]).length === 0);
   check("C5 failure restarts the count", obs.observe("bash", { command: "npm test" }, true, [{ type: "text", text: FAIL_TEXT }]).length === 0);
+
+  // Progress rule: successful execution is NOT automatically progress.
+  // Observable improvement = a changed normalized output.
+  const o5 = new TrajectoryObserver();
+  o5.observe("edit", { path: "a.ts" }, false, []); // edit 1
+  o5.observe("bash", { command: "npm test" }, false, [{ type: "text", text: "12 passing" }]); // first success = baseline, progress
+  o5.observe("edit", { path: "a.ts" }, false, []); // edit 1 (window reset by the progress)
+  o5.observe("bash", { command: "npm test" }, false, [{ type: "text", text: "12 passing" }]); // identical output: NOT progress
+  const c10a = o5.observe("edit", { path: "a.ts" }, false, []); // edit 2
+  check("C10 identical successful output does not reset windows", c10a.length === 0);
+  const c10b = o5.observe("edit", { path: "a.ts" }, false, []); // edit 3 -> churn still fires
+  check("C10b churn accumulates across non-improving successes", c10b.length === 1 && c10b[0].feature === "edit_churn");
+
+  const o6 = new TrajectoryObserver();
+  o6.observe("edit", { path: "a.ts" }, false, []);
+  o6.observe("edit", { path: "a.ts" }, false, []);
+  o6.observe("bash", { command: "npm test" }, false, [{ type: "text", text: "12 passing" }]); // progress
+  o6.observe("edit", { path: "a.ts" }, false, []);
+  o6.observe("edit", { path: "a.ts" }, false, []);
+  o6.observe("bash", { command: "npm test" }, false, [{ type: "text", text: "5 failing: test_quote_edge" }]); // changed output = progress
+  const c11 = o6.observe("edit", { path: "a.ts" }, false, []); // edit 1 of fresh window
+  check("C11 changed output resets the windows", c11.length === 0);
+
+  const o7 = new TrajectoryObserver();
+  o7.observe("bash", { command: "ls" }, false, [{ type: "text", text: "a b c" }]); // baseline (progress)
+  o7.observe("bash", { command: "ls" }, false, [{ type: "text", text: "a b c" }]); // n=1
+  o7.observe("bash", { command: "ls" }, false, [{ type: "text", text: "a b c" }]); // n=2
+  const c12 = o7.observe("bash", { command: "ls" }, false, [{ type: "text", text: "a b c" }]); // n=3 -> stalled_progress
+  check("C12 identical successful repetitions fire stalled_progress", c12.some((e) => e.feature === "stalled_progress"));
+
+  // Numbers in output are collapsed: "3 of 12" and "7 of 25" are the same state
+  const o7b = new TrajectoryObserver();
+  o7b.observe("bash", { command: "npm test" }, false, [{ type: "text", text: "Error: 3 of 12 tests failed" }]); // baseline
+  const c13 = o7b.observe("bash", { command: "npm test" }, false, [{ type: "text", text: "Error: 7 of 25 tests failed" }]); // same normalized state
+  const wins = o7b.getWindows();
+  check("C13 number-collapsed outputs are the same state (stall n=1, no fire)", c13.length === 0 && wins.actions["cmd:npm test"] === 1);
 
   obs.reset("ep-9");
   check("C6 reset clears windows", obs.observe("bash", { command: "npm test" }, true, [{ type: "text", text: FAIL_TEXT }]).length === 0 && obs.currentEpisodeId === "ep-9");
@@ -353,7 +400,7 @@ const FAIL_TEXT = "npm ERR! Test suite failed\nError: 3 of 12 tests failed (see 
     r = router.route("user");
     check("D16 /handoff reset issues a manual episode", r.out.model.id === "cheap-m" && (r.out.state?.episodeId ?? "").startsWith("manual-"));
     await m.commands.get("handoff")!("config", ctx);
-    check("D17 /handoff config shows both models", notifications.at(-1)?.text.includes("prov/cheap-m") && notifications.at(-1)?.text.includes("prov/strong-m"));
+    check("D17 /handoff config shows both models", (notifications.at(-1)?.text ?? "").includes("prov/cheap-m") && (notifications.at(-1)?.text ?? "").includes("prov/strong-m"));
 
     // Episode persistence entries
     const epEntries = m.entries.filter((e) => e.customType === "pi-episodes:state");
@@ -377,10 +424,12 @@ const FAIL_TEXT = "npm ERR! Test suite failed\nError: 3 of 12 tests failed (see 
   const { default: handoffExt } = await import("../extensions/pi-handoff/index.ts");
   const envBackup = { ...process.env };
 
-  // Unconfigured: refuses to route with an actionable error
+  // Unconfigured: refuses to route with an actionable error. PI_HANDOFF_CONFIG
+  // points at an absent file so a local handoff.config.json can't leak in.
   delete process.env.PI_HANDOFF_CHEAP;
   delete process.env.PI_HANDOFF_STRONG;
   {
+    process.env.PI_HANDOFF_CONFIG = "/nonexistent/pi-handoff-arm.json";
     const m = makePi();
     const { ctx } = makeCtx([]);
     handoffExt(m.pi);
@@ -466,6 +515,159 @@ const FAIL_TEXT = "npm ERR! Test suite failed\nError: 3 of 12 tests failed (see 
     await m.commands.get("handoff")!("reset", ctx);
     const r2 = router.route("user");
     check("F2 standalone manual boundary works", (r2.out.state?.episodeId ?? "").startsWith("manual-") && r2.out.model.id === "c");
+  } finally {
+    process.env = envBackup;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// G. Boundary persistence authority (reload, lost events, branch changes)
+//
+// The branch's `pi-episodes:state` entry is the authoritative episode
+// identity; the event bus is only a notification. These regressions cover
+// boundaries recorded WITHOUT a bus event this process observed.
+// ---------------------------------------------------------------------------
+
+{
+  const envBackup = { ...process.env };
+  process.env.PI_HANDOFF_CHEAP = "prov/c";
+  process.env.PI_HANDOFF_STRONG = "prov/s";
+  delete process.env.PI_EPISODES_USER_TURN;
+
+  try {
+    const { default: trajectoryExt } = await import("../extensions/pi-trajectory/index.ts");
+    const { default: episodesExt } = await import("../extensions/pi-episodes/index.ts");
+    const { default: handoffExt } = await import("../extensions/pi-handoff/index.ts");
+    const { CHANNEL } = await import("../packages/shared/index.ts");
+    const { reconcileEpisode } = await import("../extensions/pi-handoff/src/state-machine.ts");
+
+    // G1: boundary entry recorded on the branch but no bus event observed
+    // (e.g. recorded before pi-handoff loaded, or while it was absent).
+    // pi-handoff alone must release from the entry at the next request.
+    {
+      const m = makePi();
+      const { ctx } = makeCtx(["prov/c", "prov/s"], () => m.entries);
+      trajectoryExt(m.pi);
+      handoffExt(m.pi); // deliberately no pi-episodes: entries are the only source
+      await dispatch(m, "session_start", { type: "session_start", reason: "startup" }, ctx);
+      const router = makeRouter(m, ctx);
+
+      router.route("user");
+      for (let i = 0; i < 4; i++) await toolResult(m, ctx, "bash", { command: "npm test" }, true, FAIL_TEXT);
+      let r = router.route("continuation");
+      check("G1a locked at R=5", r.out.state?.phase === "STRONG_LOCKED" && r.out.state?.risk === 5);
+
+      // boundary recorded on the branch, event never delivered
+      m.entries.push({ type: "custom", customType: "pi-episodes:state", data: { counter: 2, episodeId: "ep-2", kind: "command", t: new Date().toISOString() } });
+
+      r = router.route("continuation");
+      check("G1b persisted episode identity releases the lock", r.out.model.id === "c" && r.out.state?.phase === "CHEAP" && r.out.state?.episodeId === "ep-2" && r.out.state?.risk === 0);
+      check("G1c escalation count survives reconciliation", r.out.state?.escalations === 1);
+      check("G1d release broadcast as state change", m.bus.log.some((e) => e.channel === CHANNEL.state && (e.data as any).reason === "boundary"));
+      // and it is not re-applied on the following request
+      r = router.route("continuation");
+      check("G1e reconciliation is idempotent", r.out.state?.episodeId === "ep-2" && r.out.state?.escalations === 1);
+    }
+
+    // G2: reload (new process). Fresh in-memory state everywhere; only the
+    // branch carries history (router state + a boundary recorded AFTER the
+    // last model request, before the process died).
+    {
+      const m = makePi();
+      const locked = { phase: "STRONG_LOCKED", risk: 5, episodeId: "ep-1", escalations: 1 };
+      m.entries.push({ type: "custom", customType: "pi.virtual-model-state", data: { provider: "handoff", modelId: "auto", state: locked } });
+      m.entries.push({ type: "custom", customType: "pi-episodes:state", data: { counter: 2, episodeId: "ep-2", kind: "command" } });
+      const { ctx, notifications } = makeCtx(["prov/c", "prov/s"], () => m.entries);
+      trajectoryExt(m.pi);
+      episodesExt(m.pi);
+      handoffExt(m.pi);
+      await dispatch(m, "session_start", { type: "session_start", reason: "resume" }, ctx);
+
+      // pi restores the branch's router state into request.state
+      const router = makeRouter(m, ctx, locked);
+      const r = router.route("user");
+      check("G2a after reload, persisted episode releases before serving", r.out.model.id === "c" && r.out.state?.phase === "CHEAP" && r.out.state?.episodeId === "ep-2" && r.out.state?.escalations === 1);
+
+      await m.commands.get("episode")!("status", ctx);
+      check("G2b episode counter restored from branch on reload", (notifications.at(-1)?.text ?? "").includes("ep-2"));
+    }
+
+    // G3: branch changes. Each branch's own entries are authoritative for it;
+    // a boundary on one branch must not clobber the other branch's state.
+    {
+      const branchA = [{ type: "custom", customType: "pi-episodes:state", data: { counter: 2, episodeId: "ep-2" } }];
+      const branchB = [{ type: "custom", customType: "pi-episodes:state", data: { counter: 1, episodeId: "ep-1" } }];
+      let active: any[] = branchA;
+      const m = makePi();
+      const { ctx } = makeCtx(["prov/c", "prov/s"], () => active);
+      handoffExt(m.pi);
+      await dispatch(m, "session_start", { type: "session_start", reason: "startup" }, ctx);
+
+      active = branchB;
+      const routerB = makeRouter(m, ctx, { phase: "CHEAP", risk: 0, episodeId: "ep-1", escalations: 0 }, () => active);
+      let r = routerB.route("user");
+      check("G3a branch B keeps its own episode identity", r.out.state?.episodeId === "ep-1" && r.out.state?.risk === 0);
+
+      active = branchA;
+      const routerA = makeRouter(m, ctx, { phase: "CHEAP", risk: 0, episodeId: "ep-2", escalations: 0 }, () => active);
+      r = routerA.route("user");
+      check("G3b branch A keeps its own episode identity", r.out.state?.episodeId === "ep-2");
+
+      // boundary recorded on A after its last route (ahead of A's state)
+      branchA.push({ type: "custom", customType: "pi-episodes:state", data: { counter: 3, episodeId: "ep-3" } });
+      r = routerA.route("user");
+      check("G3c boundary ahead of branch state releases on A", r.out.state?.episodeId === "ep-3" && r.out.state?.phase === "CHEAP");
+
+      active = branchB;
+      r = routerB.route("user");
+      check("G3d branch B unaffected by A's boundary", r.out.state?.episodeId === "ep-1" && r.out.state?.risk === 0);
+    }
+
+    // G4: reconcileEpisode unit semantics
+    {
+      const base = { phase: "CHEAP" as const, risk: 2, episodeId: null as string | null, escalations: 0 };
+      const ep3 = { episode: { counter: 3, episodeId: "ep-3" } };
+      const r1 = reconcileEpisode(base, { ...ep3, routerStateAfterLatestEpisode: false });
+      check("G4a stale null-id state vs recorded boundary -> release", r1.boundary && r1.state.phase === "CHEAP" && r1.state.risk === 0 && r1.state.episodeId === "ep-3");
+      const r1b = reconcileEpisode(base, { ...ep3, routerStateAfterLatestEpisode: true });
+      check("G4a2 fresh null-id state adopts id without resetting", !r1b.boundary && r1b.state.episodeId === "ep-3" && r1b.state.risk === 2);
+
+      const same = { phase: "CHEAP" as const, risk: 7, episodeId: "ep-2", escalations: 2 };
+      const r2 = reconcileEpisode(same, { episode: { counter: 2, episodeId: "ep-2" } });
+      check("G4b matching id is a no-op (same reference)", r2.state === same && !r2.boundary);
+      const r3 = reconcileEpisode(same, { episode: null });
+      check("G4c no persisted episode is a no-op", r3.state === same && !r3.boundary);
+      const r3b = reconcileEpisode(same, null);
+      check("G4c2 no authority at all is a no-op", r3b.state === same && !r3b.boundary);
+
+      const locked = { phase: "STRONG_LOCKED" as const, risk: 9, episodeId: "ep-2", escalations: 3 };
+      const r4 = reconcileEpisode(locked, { episode: { counter: 5, episodeId: "ep-5" }, routerStateAfterLatestEpisode: false });
+      check("G4d ahead-of-state locked state releases, keeps escalations", r4.boundary && r4.state.phase === "CHEAP" && r4.state.risk === 0 && r4.state.episodeId === "ep-5" && r4.state.escalations === 3);
+    }
+
+    // G5: user-turn policy is OFF by default (explicit boundaries only,
+    // which is what benchmark runs require)
+    {
+      const m = makePi();
+      const { ctx } = makeCtx(["prov/c", "prov/s"], () => m.entries);
+      episodesExt(m.pi);
+      await dispatch(m, "session_start", { type: "session_start", reason: "startup" }, ctx);
+      await dispatch(m, "agent_settled", { type: "agent_settled", aborted: false }, ctx);
+      await dispatch(m, "before_agent_start", { type: "before_agent_start", messageType: "user", prompt: "next task", systemPrompt: "", systemPromptOptions: {} }, ctx);
+      check("G5 user_turn boundary OFF by default", !m.bus.log.some((e) => e.channel === CHANNEL.boundary));
+    }
+
+    // G6: opt-in still works
+    process.env.PI_EPISODES_USER_TURN = "1";
+    {
+      const m = makePi();
+      const { ctx } = makeCtx(["prov/c", "prov/s"], () => m.entries);
+      episodesExt(m.pi);
+      await dispatch(m, "session_start", { type: "session_start", reason: "startup" }, ctx);
+      await dispatch(m, "agent_settled", { type: "agent_settled", aborted: false }, ctx);
+      await dispatch(m, "before_agent_start", { type: "before_agent_start", messageType: "user", prompt: "next task", systemPrompt: "", systemPromptOptions: {} }, ctx);
+      check("G6 user_turn boundary ON with PI_EPISODES_USER_TURN=1", m.bus.log.some((e) => e.channel === CHANNEL.boundary && (e.data as any).kind === "user_turn"));
+    }
   } finally {
     process.env = envBackup;
   }
