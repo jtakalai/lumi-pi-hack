@@ -382,5 +382,7 @@ The intended contribution is a compact, interpretable and experimentally validat
 Run the scripted suite verifying state transitions, trajectory risk observation, and boundary controls using a mocked Pi runtime:
 
 ```bash
-node test/smoke.ts
-node test/scenarios.ts
+npm test
+
+uv run pytest -v test/test_pitok_and_eval.py
+```
