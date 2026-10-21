@@ -8,5 +8,6 @@ exec pi \
   -e ./extensions/pi-trajectory/index.ts \
   -e ./extensions/pi-episodes/index.ts \
   -e ./extensions/pi-handoff/index.ts \
+  -e ./extensions/gondolin \
   --model handoff/auto \
   "$@"
