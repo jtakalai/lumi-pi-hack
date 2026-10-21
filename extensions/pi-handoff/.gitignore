@@ -1,1 +1,4 @@
 node_modules/
+
+# Local machine-specific model config (see handoff.config.json.example)
+handoff.config.json

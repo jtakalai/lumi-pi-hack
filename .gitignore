@@ -1,4 +1,25 @@
+# --- Secrets / local environment ---
 .env
+.env.*
+!.env.example
+
+# --- Dependencies ---
 node_modules/
-# Local machine config (no secrets, but machine-specific). See the .example.
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- pi extensions: local machine-specific config (see the .example) ---
 extensions/pi-handoff/handoff.config.json
+
+# --- Runtime exports / diagnostics ---
+pi-trajectory.jsonl
+
+# --- OS ---
+.DS_Store
+Thumbs.db

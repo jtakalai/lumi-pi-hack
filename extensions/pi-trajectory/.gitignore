@@ -1,0 +1,4 @@
+node_modules/
+
+# Default output of /trajectory export
+pi-trajectory.jsonl
