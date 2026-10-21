@@ -405,3 +405,19 @@ npm test
 
 uv run pytest -v test/test_pitok_and_eval.py
 ```
+
+### Benchmark Tasks Setup & Evaluation
+
+#### 1. Setup and Reset Benchmark Tasks
+
+To generate or restore the 10 progressive benchmark tasks to their initial failing state, run:
+
+```bash
+python3 reset_benchmark.py
+```
+
+#### 2. Example Prompt for the LLM Agent
+Provide the following prompt directly in the pi interface to test the agent and trajectory-triggered escalation:
+```
+Run pytest benchmark_tasks/task_01/test_solution.py. Inspect the failure, edit benchmark_tasks/task_01/solution.py to fix the bug, and keep running tests until all tests pass.
+```
