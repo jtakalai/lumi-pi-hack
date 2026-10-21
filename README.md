@@ -373,3 +373,14 @@ The intended contribution is a compact, interpretable and experimentally validat
 **Papers (abstracts via search)**
 
 - [TACIT-Switch](https://arxiv.org/pdf/2608.27911)
+
+
+### 8. Running Tests
+
+#### 8.1 TypeScript Extension Deterministic Tests (`pi-handoff`, `pi-trajectory`, `pi-episodes`)
+
+Run the scripted suite verifying state transitions, trajectory risk observation, and boundary controls using a mocked Pi runtime:
+
+```bash
+node test/smoke.ts
+node test/scenarios.ts
