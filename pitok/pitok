@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""pitok — monitor token usage of pi sessions.
+
+pi stores sessions as JSONL under its agent directory (default
+~/.pi/agent/sessions/). Every assistant message records model, provider,
+usage (input/output/cacheRead/cacheWrite/totalTokens/cost) and a timestamp;
+there are also standalone `usage` entries (e.g. cache warming). pitok reads
+those files — it is read-only and never modifies session data.
+
+Where to find pi's data (first match wins):
+  1. --sessions-dir PATH        explicit override
+  2. $PITOK_SESSIONS_DIR        environment variable
+  3. $PI_CODING_AGENT_DIR/sessions   (pi's own agent-dir override)
+  4. ~/.pi/agent/sessions       pi's default
+
+Usage:
+  pitok                      summarize all sessions (sorted by tokens)
+  pitok <session.jsonl>      timeline + per-model breakdown for one session
+  pitok --watch [SECS]       live: refresh the most recent session in place
+  pitok --all                count every branch, not just the active one
+  pitok --json               machine-readable output
+  pitok --no-log             don't append to the usage log
+
+Log: each scan appends one JSON line per session to the log file
+     ($PITOK_LOG, or --log-file, default ~/.pi/toklog/pitok.jsonl).
+     Point cron at `pitok --quiet` to build history over time.
+"""
+
+import json
+import os
+import sys
+import time
+from collections import defaultdict
+from datetime import datetime, timezone
+
+DEFAULT_LOG = os.path.expanduser("~/.pi/toklog/pitok.jsonl")
+
+
+def sessions_dir():
+    """Resolve where pi keeps session files (see module docstring)."""
+    override = os.environ.get("PITOK_SESSIONS_DIR")
+    if override:
+        return os.path.expanduser(override)
+    agent_dir = os.environ.get("PI_CODING_AGENT_DIR")
+    if agent_dir:
+        d = os.path.join(os.path.expanduser(agent_dir), "sessions")
+        if os.path.isdir(d):
+            return d
+    return os.path.expanduser("~/.pi/agent/sessions")
+
+
+# ---------- parsing ----------
+
+def iter_entries(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+
+def main_path_ids(entries):
+    """Return the set of entry ids on the active branch (latest leaf -> root)."""
+    by_id = {}
+    for e in entries:
+        if e.get("id"):
+            by_id[e["id"]] = e
+    if not by_id:
+        return set(by_id)
+    leaf = max(by_id.values(), key=lambda e: e.get("timestamp") or "")
+    path = set()
+    cur = leaf
+    while cur is not None and cur.get("id") in by_id:
+        path.add(cur["id"])
+        cur = by_id.get(cur.get("parentId") or "")
+    return path
+
+
+def ts_of(entry, message):
+    """Best available timestamp as ISO string (UTC)."""
+    for t in (message.get("timestamp"), entry.get("timestamp")):
+        if t:
+            return t
+    return None
+
+
+def parse_ts(t):
+    if not t:
+        return None
+    if isinstance(t, (int, float)):  # unix ms
+        return datetime.fromtimestamp(t / 1000, tz=timezone.utc)
+    t = str(t)
+    if t.endswith("Z"):
+        t = t[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(t)
+        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def usage_records(path, all_branches=False):
+    """Yield usage records: (dt, model, provider, kind, usage_dict)."""
+    entries = list(iter_entries(path))
+    keep = main_path_ids(entries) if not all_branches else None
+    for e in entries:
+        if keep is not None and e.get("id") and e["id"] not in keep:
+            continue
+        m = e.get("message") or {}
+        usage = m.get("usage")
+        kind = None
+        if e.get("type") == "message" and m.get("role") == "assistant" and usage:
+            kind = "assistant"
+            model = m.get("model") or "?"
+            provider = m.get("provider") or "?"
+        elif e.get("type") == "usage" and e.get("usage"):
+            usage = e["usage"]
+            kind = e.get("kind") or "usage"
+            model = e.get("model") or "?"
+            provider = e.get("provider") or "?"
+        else:
+            continue
+        yield parse_ts(ts_of(e, m)), model, provider, kind, usage
+
+
+# ---------- aggregation ----------
+
+def zeros():
+    return {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0,
+            "total": 0, "cost": 0.0, "requests": 0}
+
+
+def add(agg, u):
+    agg["input"] += u.get("input") or 0
+    agg["output"] += u.get("output") or 0
+    agg["cacheRead"] += u.get("cacheRead") or 0
+    agg["cacheWrite"] += u.get("cacheWrite") or 0
+    agg["total"] += u.get("totalTokens") or (
+        (u.get("input") or 0) + (u.get("output") or 0)
+        + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0))
+    cost = u.get("cost") or {}
+    agg["cost"] += cost.get("total") or 0
+    agg["requests"] += 1
+
+
+def analyze(path, all_branches=False):
+    total = zeros()
+    by_model = defaultdict(zeros)
+    first = last = None
+    records = []
+    for dt, model, provider, kind, u in usage_records(path, all_branches):
+        add(total, u)
+        add(by_model[model], u)
+        if dt:
+            first = dt if first is None or dt < first else first
+            last = dt if last is None or dt > last else last
+        if kind == "assistant":
+            records.append((dt, model, provider, u))
+    return {"path": path, "total": total, "by_model": dict(by_model),
+            "first": first, "last": last, "records": records}
+
+
+def session_files(root=None):
+    root = root or sessions_dir()
+    out = []
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            if f.endswith(".jsonl"):
+                out.append(os.path.join(dirpath, f))
+    return out
+
+
+def file_meta(path):
+    """Session header (first line) if present."""
+    for e in iter_entries(path):
+        if e.get("type") == "session":
+            return e
+        break
+    return {}
+
+
+# ---------- formatting ----------
+
+def fmt_tok(n):
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+def fmt_cost(c):
+    return f"${c:.4f}" if c else "$0"
+
+
+def fmt_dt(dt, with_date=False):
+    if not dt:
+        return "-"
+    local = dt.astimezone()
+    if with_date:
+        return local.strftime("%Y-%m-%d %H:%M:%S")
+    return local.strftime("%H:%M:%S")
+
+
+def models_str(by_model):
+    top = sorted(by_model.items(), key=lambda kv: -kv[1]["total"])[:2]
+    s = ", ".join(f"{m.split('/')[-1]}" for m, _ in top)
+    if len(by_model) > 2:
+        s += f" +{len(by_model) - 2}"
+    return s or "-"
+
+
+def write_log(analyses, log_file):
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+    scanned = datetime.now(timezone.utc).isoformat()
+    with open(log_file, "a", encoding="utf-8") as f:
+        for a in analyses:
+            head = file_meta(a["path"])
+            f.write(json.dumps({
+                "scanned_at": scanned,
+                "session": a["path"],
+                "cwd": head.get("cwd"),
+                "started": head.get("timestamp"),
+                "requests": a["total"]["requests"],
+                "total": a["total"],
+                "by_model": a["by_model"],
+            }) + "\n")
+
+
+def print_summary(analyses, as_json=False, quiet=False):
+    if as_json:
+        print(json.dumps([
+            {k: v for k, v in a.items() if k != "records"} |
+            {"first": a["first"].isoformat() if a["first"] else None,
+             "last": a["last"].isoformat() if a["last"] else None}
+            for a in analyses
+        ], indent=2))
+    elif not quiet:
+        print(f"{'SESSION':<40} {'REQUESTS':>8} {'IN':>8} {'OUT':>8} "
+              f"{'CACHE_R':>9} {'CACHE_W':>9} {'TOTAL':>9} {'COST':>9}  MODELS")
+        for a in sorted(analyses, key=lambda a: -a["total"]["total"]):
+            t = a["total"]
+            head = file_meta(a["path"])
+            dt = fmt_dt(parse_ts(head.get("timestamp")), with_date=True)
+            sid = (head.get("id") or os.path.basename(a["path"]))[:8]
+            print(f"{dt} {sid:<32} {t['requests']:>8} {fmt_tok(t['input']):>8} "
+                  f"{fmt_tok(t['output']):>8} {fmt_tok(t['cacheRead']):>9} "
+                  f"{fmt_tok(t['cacheWrite']):>9} {fmt_tok(t['total']):>9} "
+                  f"{fmt_cost(t['cost']):>9}  {models_str(a['by_model'])}")
+        grand = zeros()
+        for a in analyses:
+            for k in grand:
+                grand[k] += a["total"][k]
+        print(f"{'TOTAL':<40} {grand['requests']:>8} {fmt_tok(grand['input']):>8} "
+              f"{fmt_tok(grand['output']):>8} {fmt_tok(grand['cacheRead']):>9} "
+              f"{fmt_tok(grand['cacheWrite']):>9} {fmt_tok(grand['total']):>9} "
+              f"{fmt_cost(grand['cost']):>9}")
+
+
+def print_detail(a, as_json=False):
+    if as_json:
+        out = {k: v for k, v in a.items() if k != "records"}
+        out["first"] = a["first"].isoformat() if a["first"] else None
+        out["last"] = a["last"].isoformat() if a["last"] else None
+        out["timeline"] = [
+            {"time": (dt.isoformat() if dt else None), "model": m,
+             "provider": p, "usage": u}
+            for dt, m, p, u in a["records"]
+        ]
+        print(json.dumps(out, indent=2))
+        return
+    head = file_meta(a["path"])
+    print(f"session : {os.path.basename(a['path'])}")
+    print(f"cwd     : {head.get('cwd', '?')}")
+    print(f"window  : {fmt_dt(a['first'], with_date=True)}  ->  "
+          f"{fmt_dt(a['last'], with_date=True)}")
+    print(f"models  : {models_str(a['by_model'])}")
+    print()
+    print(f"{'TIME':<20} {'MODEL':<28} {'IN':>8} {'OUT':>8} {'CACHE_R':>9} "
+          f"{'CACHE_W':>9} {'CUM':>9}")
+    cum = 0
+    for dt, model, _p, u in a["records"]:
+        cum += u.get("totalTokens") or 0
+        short = model if len(model) <= 28 else "…" + model[-27:]
+        print(f"{fmt_dt(dt, with_date=True):<20} {short:<28} "
+              f"{fmt_tok(u.get('input') or 0):>8} {fmt_tok(u.get('output') or 0):>8} "
+              f"{fmt_tok(u.get('cacheRead') or 0):>9} {fmt_tok(u.get('cacheWrite') or 0):>9} "
+              f"{fmt_tok(cum):>9}")
+    print()
+    print("per model:")
+    for m, t in sorted(a["by_model"].items(), key=lambda kv: -kv[1]["total"]):
+        print(f"  {m:<32} {t['requests']:>5} req  "
+              f"in {fmt_tok(t['input']):>8}  out {fmt_tok(t['output']):>8}  "
+              f"cacheR {fmt_tok(t['cacheRead']):>9}  "
+              f"total {fmt_tok(t['total']):>9}  {fmt_cost(t['cost'])}")
+    t = a["total"]
+    print(f"  {'TOTAL':<32} {t['requests']:>5} req  total {fmt_tok(t['total']):>9}  "
+          f"{fmt_cost(t['cost'])}")
+
+
+def watch(path=None, interval=5, root=None):
+    target = path
+    print(f"watching {target or '(most recent session)'} every {interval}s — Ctrl-C to stop")
+    try:
+        while True:
+            if target is None:
+                files = session_files(root)
+                if not files:
+                    time.sleep(interval)
+                    continue
+                target = max(files, key=os.path.getmtime)
+            a = analyze(target, all_branches=True)
+            t = a["total"]
+            stamp = datetime.now().strftime("%H:%M:%S")
+            line = (f"\r{stamp}  {os.path.basename(target)[:44]:<44} "
+                    f"req {t['requests']:<4} in {fmt_tok(t['input']):>8} "
+                    f"out {fmt_tok(t['output']):>8} cacheR {fmt_tok(t['cacheRead']):>9} "
+                    f"TOTAL {fmt_tok(t['total']):>9}  {fmt_cost(t['cost'])}   ")
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print()
+
+
+# ---------- main ----------
+
+def main(argv):
+    args = [a for a in argv if a != "--"]
+    flags = {"all", "--all", "--json", "--no-log", "--quiet", "--watch"}.intersection(args)
+    positional = []
+    log_file_override = None
+    sessions_override = None
+    skip = None
+    for a in args:
+        if skip:
+            if skip == "log":
+                log_file_override = a
+            elif skip == "sessions":
+                sessions_override = a
+            skip = None
+            continue
+        if a == "--log-file":
+            skip = "log"
+            continue
+        if a == "--sessions-dir":
+            skip = "sessions"
+            continue
+        if a not in flags:
+            positional.append(a)
+    json_out = "--json" in flags
+    all_branches = "--all" in flags or "all" in flags
+    quiet = "--quiet" in flags
+
+    root = sessions_dir()
+    if sessions_override:
+        root = os.path.expanduser(sessions_override)
+    log_file = None
+    if "--no-log" not in flags:
+        log_file = log_file_override or os.environ.get("PITOK_LOG") or DEFAULT_LOG
+
+    if "--watch" in flags or "watch" in flags:
+        interval = 5
+        path = None
+        for a in positional:
+            if a.endswith(".jsonl") and os.path.exists(a):
+                path = a
+            elif a.isdigit():
+                interval = int(a)
+        watch(path, interval, root)
+        return 0
+
+    if positional:
+        path = positional[0]
+        if not os.path.exists(path):
+            print(f"pitok: no such file: {path}", file=sys.stderr)
+            return 1
+        a = analyze(path, all_branches)
+        print_detail(a, json_out)
+        if log_file and not json_out:
+            write_log([a], log_file)
+            if not quiet:
+                print(f"\nlogged to {log_file}")
+    else:
+        if not os.path.isdir(root):
+            print(f"pitok: sessions dir not found: {root}\n"
+                  f"       (set --sessions-dir, PITOK_SESSIONS_DIR, or "
+                  f"PI_CODING_AGENT_DIR)", file=sys.stderr)
+            return 1
+        files = session_files(root)
+        if not files:
+            print(f"pitok: no sessions found under {root}", file=sys.stderr)
+            return 1
+        analyses = [analyze(p, all_branches) for p in files]
+        print_summary(analyses, json_out, quiet)
+        if log_file:
+            write_log(analyses, log_file)
+            if not quiet:
+                print(f"\nlogged {len(analyses)} sessions to {log_file}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
