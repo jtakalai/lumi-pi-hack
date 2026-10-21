@@ -1,0 +1,15 @@
+{
+  "name": "lumi-pi-hack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "pi-handoff collection: trajectory-triggered one-way model escalation for pi",
+  "scripts": {
+    "test": "node test/smoke.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.5.0"
+  }
+}

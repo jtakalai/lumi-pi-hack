@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2022"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "baseUrl": ".",
+    "paths": {
+      // Host pi package types. Update when the installed pi version changes:
+      //   node -e "console.log(require.resolve('@earendil-works/pi-coding-agent/package.json'))"
+      "@earendil-works/pi-coding-agent": [
+        "/opt/homebrew/Cellar/pi-coding-agent/1.3.0/libexec/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
+      ]
+    },
+    "types": ["node"]
+  },
+  "include": ["extensions/**/*.ts", "packages/**/*.ts", "test/**/*.ts"]
+}

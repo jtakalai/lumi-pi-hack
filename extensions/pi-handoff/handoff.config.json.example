@@ -1,0 +1,31 @@
+# Example pi-handoff configuration.
+#
+# Copy to `handoff.config.json` (same directory) and fill in real models,
+# or configure via env vars / CLI flags (which take precedence):
+#
+#   PI_HANDOFF_CHEAP="anthropic/claude-haiku-4-5"
+#   PI_HANDOFF_STRONG="anthropic/claude-opus-4-5"
+#   PI_HANDOFF_THRESHOLD=4
+#   PI_HANDOFF_WEIGHTS="1,1,1"     # repeated_failure,edit_churn,stalled_progress
+#
+#   pi -e ./extensions/pi-handoff/index.ts \
+#      --handoff-cheap anthropic/claude-haiku-4-5 \
+#      --handoff-strong anthropic/claude-opus-4-5
+#
+# Then select the virtual model:  /model handoff/auto
+#
+# Precedence per field: CLI flag > env > this file > defaults
+# (defaults: threshold 4, weights all 1; cheap/strong have NO default).
+
+{
+  "cheap": "anthropic/claude-haiku-4-5",
+  "strong": "anthropic/claude-opus-4-5",
+  "threshold": 4,
+  "weights": {
+    "repeated_failure": 1,
+    "edit_churn": 1,
+    "stalled_progress": 1
+  },
+  "cheapThinking": "medium",
+  "strongThinking": "high"
+}

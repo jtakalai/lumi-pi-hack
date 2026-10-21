@@ -1,0 +1,7 @@
+{
+  "name": "pi-handoff-shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Event and data contracts shared by the pi-handoff extension collection"
+}

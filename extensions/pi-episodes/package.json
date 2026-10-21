@@ -1,0 +1,18 @@
+{
+  "name": "pi-episodes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Workflow episode boundary controller for the pi-handoff collection",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
