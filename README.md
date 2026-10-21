@@ -239,8 +239,3 @@ Opened in full: the pi repository README and four docs pages. Everything else wa
 - [AggAgent](https://arxiv.org/abs/2604.11753), [SWE-Pruner](https://arxiv.org/abs/2601.16746), [TACIT-Switch](https://arxiv.org/pdf/2608.27911)
 - [Meta-Harness](https://arxiv.org/abs/2603.28052), [AHE](https://arxiv.org/abs/2604.25850), [TTHE](https://arxiv.org/abs/2607.08124), [Darwin Gödel Machine](https://arxiv.org/abs/2505.22954), [Live-SWE-agent](https://arxiv.org/abs/2511.13646), [ContextEvo](https://arxiv.org/pdf/2609.34649)
 - [Rethinking the Evaluation of Harness Evolution](https://arxiv.org/pdf/2607.12227), [Same Model, Different Harness](https://arxiv.org/pdf/2608.26218), [DARS](https://arxiv.org/pdf/2503.14269)
-
-**Other**
-
-- [The Harness Problem (hashline)](https://blog.can.ac/2026/02/12/the-harness-problem), [hashline replication](https://dev.to/nwyin/hashline-vs-replace-does-the-edit-format-matter-15n2)
-- [SWE-Router write-up](https://codex.danielvaughan.com/2026/07/10/swe-router-trajectory-based-model-routing-codex-cli-partial-exploration-cost-escalation/), [AgentRouter slides](https://icml.cc/media/icml-2026/Slides/68040.pdf), [Letta sleep-time compute](https://letta.com/blog/sleep-time-compute)
