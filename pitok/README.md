@@ -7,20 +7,23 @@ modifies session data.
 pi records `model`, `provider`, full `usage` (input / output / cacheRead /
 cacheWrite / totalTokens / cost) and a timestamp on every assistant message
 in its JSONL session files, plus standalone `usage` entries (e.g. cache
-warming). pitok reads those files and answers: **how many tokens did a
-session use, per model, and at what time?**
+warming) and, for sessions renamed in the `/resume` picker, a `session_info`
+entry carrying the name. pitok reads those files and answers: **how many
+tokens did a session use, per model, and at what time — and what is it
+called?**
 
 ## Quick start
 
 ```bash
 cd pitok
 ./install.sh        # or: cp pitok ~/.local/bin/  (any dir on your PATH)
-pitok               # summarize all sessions, sorted by tokens
+pitok               # summarize all sessions, newest first
 ```
 
 ```
-SESSION                                  REQUESTS       IN      OUT   CACHE_R   CACHE_W     TOTAL      COST  MODELS
-2026-10-16 17:41:13 01a14528                  421   56.02M   358.6k         0         0    56.38M        $0  Qwen3.8-27B
+SESSION                                  REQUESTS       IN      OUT   CACHE_R   CACHE_W     TOTAL      COST  NAME                      MODELS
+2026-10-21 11:06:52 01a15d7f                   19   328.4k    16.1k         0         0    344.4k        $0  pitok_creation            Qwen3.8-27B
+2026-10-18 12:16:42 01a14e4c                  235   27.95M   371.5k         0         0    28.32M        $0  -                         Qwen3.8-27B
 ...
 TOTAL                                       1251  119.68M    1.42M         0         0   121.10M        $0
 ```
@@ -33,6 +36,12 @@ pitok <session.jsonl>      # one session: per-request timeline + per-model break
 pitok --watch [SECS]       # live: refresh the most recent session in place (Ctrl-C stops)
 ```
 
+The table is sorted by session start date, newest first. Use
+`--sort tokens` for biggest-total-first ordering. The NAME column shows the
+session name as set in pi's `/resume` picker (`-` for unnamed sessions); the
+detail view and the JSON log carry it too. If a session is renamed several
+times, the latest name wins.
+
 One-session detail view shows which model answered when, with a running total:
 
 ```
@@ -44,11 +53,14 @@ per model:
   Qwen/Qwen3.8-27B                    16 req  ...  total    262.3k  $0
 ```
 
+(the detail view header shows `session`, `name`, `cwd`, `window`, `models`.)
+
 ### Options
 
 | Flag | Meaning |
 | --- | --- |
 | `--all` | Count every branch, not just the active one (pi sessions are trees; default counts only the branch currently live, matching what the context actually contained) |
+| `--sort {date,tokens}` | Table ordering: `date` (default) = newest session first, `tokens` = biggest total first |
 | `--json` | Machine-readable output |
 | `--no-log` | Don't append to the usage log |
 | `--quiet` | No table, log only (for cron) |
@@ -62,7 +74,8 @@ Every summary run appends one JSON line per session to the log file
 `--log-file`):
 
 ```json
-{"scanned_at": "...", "session": "/.../....jsonl", "cwd": "/home/aare",
+{"scanned_at": "...", "session": "/.../....jsonl", "name": "pitok_creation",
+ "cwd": "/home/aare",
  "started": "...", "requests": 16,
  "total": {"input": 247900, "output": 14400, "cacheRead": 0,
            "cacheWrite": 0, "total": 262300, "cost": 0.0, "requests": 16},

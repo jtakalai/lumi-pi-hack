@@ -14,10 +14,11 @@ Where to find pi's data (first match wins):
   4. ~/.pi/agent/sessions       pi's default
 
 Usage:
-  pitok                      summarize all sessions (sorted by tokens)
+  pitok                      summarize all sessions (newest first)
   pitok <session.jsonl>      timeline + per-model breakdown for one session
   pitok --watch [SECS]       live: refresh the most recent session in place
   pitok --all                count every branch, not just the active one
+  pitok --sort {date,tokens} order the table (default: date, newest first)
   pitok --json               machine-readable output
   pitok --no-log             don't append to the usage log
 
@@ -103,9 +104,29 @@ def parse_ts(t):
         return None
 
 
+def scan_meta(entries):
+    """Session header and name. The name comes from `session_info` entries
+    (written when a session is renamed in pi's /resume picker); the entry
+    with the latest timestamp wins."""
+    head, name, name_ts = {}, None, ""
+    for e in entries:
+        t = e.get("type")
+        if t == "session" and not head:
+            head = e
+        elif t == "session_info" and e.get("name"):
+            ts = e.get("timestamp") or ""
+            if ts >= name_ts:
+                name, name_ts = e["name"], ts
+    return head, name
+
+
 def usage_records(path, all_branches=False):
     """Yield usage records: (dt, model, provider, kind, usage_dict)."""
-    entries = list(iter_entries(path))
+    return iter_usage(list(iter_entries(path)), all_branches)
+
+
+def iter_usage(entries, all_branches=False):
+    """Yield usage records from an entry list: (dt, model, provider, kind, u)."""
     keep = main_path_ids(entries) if not all_branches else None
     for e in entries:
         if keep is not None and e.get("id") and e["id"] not in keep:
@@ -148,11 +169,13 @@ def add(agg, u):
 
 
 def analyze(path, all_branches=False):
+    entries = list(iter_entries(path))
+    head, name = scan_meta(entries)
     total = zeros()
     by_model = defaultdict(zeros)
     first = last = None
     records = []
-    for dt, model, provider, kind, u in usage_records(path, all_branches):
+    for dt, model, provider, kind, u in iter_usage(entries, all_branches):
         add(total, u)
         add(by_model[model], u)
         if dt:
@@ -160,8 +183,9 @@ def analyze(path, all_branches=False):
             last = dt if last is None or dt > last else last
         if kind == "assistant":
             records.append((dt, model, provider, u))
-    return {"path": path, "total": total, "by_model": dict(by_model),
-            "first": first, "last": last, "records": records}
+    return {"path": path, "head": head, "name": name, "total": total,
+            "by_model": dict(by_model), "first": first, "last": last,
+            "records": records}
 
 
 def session_files(root=None):
@@ -172,15 +196,6 @@ def session_files(root=None):
             if f.endswith(".jsonl"):
                 out.append(os.path.join(dirpath, f))
     return out
-
-
-def file_meta(path):
-    """Session header (first line) if present."""
-    for e in iter_entries(path):
-        if e.get("type") == "session":
-            return e
-        break
-    return {}
 
 
 # ---------- formatting ----------
@@ -219,10 +234,11 @@ def write_log(analyses, log_file):
     scanned = datetime.now(timezone.utc).isoformat()
     with open(log_file, "a", encoding="utf-8") as f:
         for a in analyses:
-            head = file_meta(a["path"])
+            head = a.get("head") or {}
             f.write(json.dumps({
                 "scanned_at": scanned,
                 "session": a["path"],
+                "name": a.get("name"),
                 "cwd": head.get("cwd"),
                 "started": head.get("timestamp"),
                 "requests": a["total"]["requests"],
@@ -231,7 +247,7 @@ def write_log(analyses, log_file):
             }) + "\n")
 
 
-def print_summary(analyses, as_json=False, quiet=False):
+def print_summary(analyses, as_json=False, quiet=False, sort="date"):
     if as_json:
         print(json.dumps([
             {k: v for k, v in a.items() if k != "records"} |
@@ -239,26 +255,39 @@ def print_summary(analyses, as_json=False, quiet=False):
              "last": a["last"].isoformat() if a["last"] else None}
             for a in analyses
         ], indent=2))
-    elif not quiet:
-        print(f"{'SESSION':<40} {'REQUESTS':>8} {'IN':>8} {'OUT':>8} "
-              f"{'CACHE_R':>9} {'CACHE_W':>9} {'TOTAL':>9} {'COST':>9}  MODELS")
-        for a in sorted(analyses, key=lambda a: -a["total"]["total"]):
-            t = a["total"]
-            head = file_meta(a["path"])
-            dt = fmt_dt(parse_ts(head.get("timestamp")), with_date=True)
-            sid = (head.get("id") or os.path.basename(a["path"]))[:8]
-            print(f"{dt} {sid:<32} {t['requests']:>8} {fmt_tok(t['input']):>8} "
-                  f"{fmt_tok(t['output']):>8} {fmt_tok(t['cacheRead']):>9} "
-                  f"{fmt_tok(t['cacheWrite']):>9} {fmt_tok(t['total']):>9} "
-                  f"{fmt_cost(t['cost']):>9}  {models_str(a['by_model'])}")
-        grand = zeros()
-        for a in analyses:
-            for k in grand:
-                grand[k] += a["total"][k]
-        print(f"{'TOTAL':<40} {grand['requests']:>8} {fmt_tok(grand['input']):>8} "
-              f"{fmt_tok(grand['output']):>8} {fmt_tok(grand['cacheRead']):>9} "
-              f"{fmt_tok(grand['cacheWrite']):>9} {fmt_tok(grand['total']):>9} "
-              f"{fmt_cost(grand['cost']):>9}")
+        return
+    if quiet:
+        return
+    if sort == "date":
+        epoch = datetime.min.replace(tzinfo=timezone.utc)
+        ordered = sorted(
+            analyses,
+            key=lambda a: (parse_ts((a.get("head") or {}).get("timestamp")) or epoch,
+                           a["path"]),
+            reverse=True)
+    else:
+        ordered = sorted(analyses, key=lambda a: -a["total"]["total"])
+    print(f"{'SESSION':<40} {'REQUESTS':>8} {'IN':>8} {'OUT':>8} "
+          f"{'CACHE_R':>9} {'CACHE_W':>9} {'TOTAL':>9} {'COST':>9}  "
+          f"{'NAME':<24}  MODELS")
+    for a in ordered:
+        t = a["total"]
+        head = a.get("head") or {}
+        dt = fmt_dt(parse_ts(head.get("timestamp")), with_date=True)
+        sid = (head.get("id") or os.path.basename(a["path"]))[:8]
+        name = a.get("name") or "-"
+        print(f"{dt} {sid:<32} {t['requests']:>8} {fmt_tok(t['input']):>8} "
+              f"{fmt_tok(t['output']):>8} {fmt_tok(t['cacheRead']):>9} "
+              f"{fmt_tok(t['cacheWrite']):>9} {fmt_tok(t['total']):>9} "
+              f"{fmt_cost(t['cost']):>9}  {name[:24]:<24}  {models_str(a['by_model'])}")
+    grand = zeros()
+    for a in analyses:
+        for k in grand:
+            grand[k] += a["total"][k]
+    print(f"{'TOTAL':<40} {grand['requests']:>8} {fmt_tok(grand['input']):>8} "
+          f"{fmt_tok(grand['output']):>8} {fmt_tok(grand['cacheRead']):>9} "
+          f"{fmt_tok(grand['cacheWrite']):>9} {fmt_tok(grand['total']):>9} "
+          f"{fmt_cost(grand['cost']):>9}")
 
 
 def print_detail(a, as_json=False):
@@ -273,8 +302,9 @@ def print_detail(a, as_json=False):
         ]
         print(json.dumps(out, indent=2))
         return
-    head = file_meta(a["path"])
+    head = a.get("head") or {}
     print(f"session : {os.path.basename(a['path'])}")
+    print(f"name    : {a.get('name') or '(unnamed)'}")
     print(f"cwd     : {head.get('cwd', '?')}")
     print(f"window  : {fmt_dt(a['first'], with_date=True)}  ->  "
           f"{fmt_dt(a['last'], with_date=True)}")
@@ -316,7 +346,8 @@ def watch(path=None, interval=5, root=None):
             a = analyze(target, all_branches=True)
             t = a["total"]
             stamp = datetime.now().strftime("%H:%M:%S")
-            line = (f"\r{stamp}  {os.path.basename(target)[:44]:<44} "
+            label = (a.get("name") or os.path.basename(target))[:44]
+            line = (f"\r{stamp}  {label:<44} "
                     f"req {t['requests']:<4} in {fmt_tok(t['input']):>8} "
                     f"out {fmt_tok(t['output']):>8} cacheR {fmt_tok(t['cacheRead']):>9} "
                     f"TOTAL {fmt_tok(t['total']):>9}  {fmt_cost(t['cost'])}   ")
@@ -335,6 +366,7 @@ def main(argv):
     positional = []
     log_file_override = None
     sessions_override = None
+    sort = "date"
     skip = None
     for a in args:
         if skip:
@@ -342,6 +374,12 @@ def main(argv):
                 log_file_override = a
             elif skip == "sessions":
                 sessions_override = a
+            elif skip == "sort":
+                if a in ("date", "tokens"):
+                    sort = a
+                else:
+                    print(f"pitok: --sort expects date or tokens, got {a!r}",
+                          file=sys.stderr)
             skip = None
             continue
         if a == "--log-file":
@@ -349,6 +387,9 @@ def main(argv):
             continue
         if a == "--sessions-dir":
             skip = "sessions"
+            continue
+        if a == "--sort":
+            skip = "sort"
             continue
         if a not in flags:
             positional.append(a)
@@ -396,7 +437,7 @@ def main(argv):
             print(f"pitok: no sessions found under {root}", file=sys.stderr)
             return 1
         analyses = [analyze(p, all_branches) for p in files]
-        print_summary(analyses, json_out, quiet)
+        print_summary(analyses, json_out, quiet, sort)
         if log_file:
             write_log(analyses, log_file)
             if not quiet:
